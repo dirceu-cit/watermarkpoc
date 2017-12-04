@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:objectstore="http://www.mulesoft.org/schema/mule/objectstore" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns:scripting="http://www.mulesoft.org/schema/mule/scripting" xmlns:batch="http://www.mulesoft.org/schema/mule/batch" xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:spring="http://www.springframework.org/schema/beans" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/batch http://www.mulesoft.org/schema/mule/batch/current/mule-batch.xsd
+http://www.mulesoft.org/schema/mule/scripting http://www.mulesoft.org/schema/mule/scripting/current/mule-scripting.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.mulesoft.org/schema/mule/objectstore http://www.mulesoft.org/schema/mule/objectstore/current/mule-objectstore.xsd"
+>
+	<http:listener-config name="HTTP_Listener_Configuration" host="0.0.0.0" port="8081" doc:name="HTTP Listener Configuration" />
+	<objectstore:config name="ObjectStore__Configuration" doc:name="ObjectStore: Configuration" objectStore-ref="_defaultUserObjectStore" persistent="true" entryTtl="0" expirationInterval="0" maxEntries="0" />
+	<db:mysql-config name="Source_DB_Configuration" host="localhost" port="3306" user="root" password="SuperSecret" database="source_db" doc:name="MySQL Configuration" />
+	<flow name="watermarkpocFlow" processingStrategy="synchronous">
+		<poll doc:name="Poll">
+			<fixed-frequency-scheduler frequency="5000" />
+			<watermark variable="lastRecordID" default-expression="1" update-expression="#[flowVars['previousRecordID']]" selector-expression="#[payload['number_no']]" object-store-ref="_defaultUserObjectStore" />
+			<db:bulk-execute config-ref="Source_DB_Configuration"    doc:name="Database">
+			</db:bulk-execute>
+		</poll>
+		<set-variable variableName="previousRecordID" value="#[flowVars['lastRecordID']]" doc:name="Initialize previousRecordID" />
+		<foreach doc:name="For Each">
+			<set-variable variableName="currentRecord" value="#[payload['number_no']]" doc:name="currentRecord" />
+			<scripting:transformer doc:name="RandDividend">
+				<scripting:script engine="Groovy"><![CDATA[flowVars.dividend = Math.abs(new Random().nextInt() % 3 - 1);
+flowVars.divisor = Math.abs(new Random().nextInt() % 3 - 1);
+System.out.println("Curent Record ID:" + flowVars['currentRecord']);
+System.out.println("Payload: " + payload );
+System.out.println("Executing " + flowVars.dividend + " / " + flowVars.divisor );
+def ans = flowVars.dividend / flowVars.divisor ;]]></scripting:script>
+			</scripting:transformer>
+			<set-variable variableName="previousRecordID" value="#[flowVars['currentRecord']]" doc:name="previousRecordID" />
+		</foreach>
+        <catch-exception-strategy doc:name="CatchExceptionStrategy" enableNotifications="false" logException="false">
+            <scripting:component doc:name="ExceptionStacktracePrintout">
+                <scripting:script engine="Groovy"><![CDATA[System.out.println("Exception Encoutered ...");
+System.out.println("Resetting Back to Last Successful Record ID:" + flowVars['previousRecordID']);]]></scripting:script>
+            </scripting:component>
+        </catch-exception-strategy>
+	</flow>
+	<flow name="resetObjectStore">
+		<http:listener config-ref="HTTP_Listener_Configuration" path="/pollReset" doc:name="HTTP" />
+        <objectstore:retrieve-and-store config-ref="ObjectStore__Configuration" key="lastRecordID" defaultValue-ref="#[0]" storeValue-ref="#[message.inboundProperties.'http.query.params'.lastEmployeeID]" doc:name="ObjectStore"/>
+		<logger message="Reset WaterMark to : #[message.inboundProperties.'http.query.params'.lastEmployeeID]" level="INFO" doc:name="Logger" />
+		<object-to-string-transformer doc:name="Object to String" />
+	</flow>
+</mule>
