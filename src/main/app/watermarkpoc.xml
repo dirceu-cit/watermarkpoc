@@ -16,8 +16,9 @@ http://www.mulesoft.org/schema/mule/objectstore http://www.mulesoft.org/schema/m
 		<poll doc:name="Poll">
 			<fixed-frequency-scheduler frequency="5000" />
 			<watermark variable="lastRecordID" default-expression="1" update-expression="#[flowVars['previousRecordID']]" selector-expression="#[payload['number_no']]" object-store-ref="_defaultUserObjectStore" />
-			<db:bulk-execute config-ref="Source_DB_Configuration"    doc:name="Database">
-			</db:bulk-execute>
+			<db:select config-ref="Source_DB_Configuration"    doc:name="Database" streaming="true">
+                <db:parameterized-query><![CDATA[select * from employees where number_no > #[flowVars['lastRecordID']] order by number_no asc]]></db:parameterized-query>
+			</db:select>
 		</poll>
 		<set-variable variableName="previousRecordID" value="#[flowVars['lastRecordID']]" doc:name="Initialize previousRecordID" />
 		<foreach doc:name="For Each">
