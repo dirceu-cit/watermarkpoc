@@ -11,24 +11,52 @@ http://www.mulesoft.org/schema/mule/objectstore http://www.mulesoft.org/schema/m
 >
 	<http:listener-config name="HTTP_Listener_Configuration" host="0.0.0.0" port="8081" doc:name="HTTP Listener Configuration" />
 	<objectstore:config name="ObjectStore__Configuration" doc:name="ObjectStore: Configuration" objectStore-ref="_defaultUserObjectStore" persistent="true" entryTtl="0" expirationInterval="0" maxEntries="0" />
-	<db:mysql-config name="Source_DB_Configuration" host="localhost" port="3306" user="root" password="SuperSecret" database="source_db" doc:name="MySQL Configuration" />
+	<db:mysql-config name="Source_DB_Configuration" host="localhost" port="3306" user="root" password="SuperSecret" database="source_db" doc:name="MySQL Configuration" >
+        <db:connection-properties>
+            <db:property key="verifyServerCertificate" value="false"/>
+        </db:connection-properties>
+    </db:mysql-config>
+    <db:mysql-config name="Middleware_MySQL_Configuration" host="las-mysql.mysql.database.azure.com" port="3306" user="deltateam@las-mysql" password="delta=b2-4a*c" database="middleware" doc:name="MySQL Configuration">
+        <db:connection-properties>
+            <db:property key="requireSSL" value="false"/>
+            <db:property key="serverTimezone" value="UTC"/>
+            <db:property key="&amp;useSSL" value="true"/>
+        </db:connection-properties>
+    </db:mysql-config>
 	<flow name="watermarkpocFlow" processingStrategy="synchronous">
 		<poll doc:name="Poll">
 			<fixed-frequency-scheduler frequency="5000" />
 			<watermark variable="lastRecordID" default-expression="1" update-expression="#[flowVars['previousRecordID']]" selector-expression="#[payload['number_no']]" object-store-ref="_defaultUserObjectStore" />
-			<db:select config-ref="Source_DB_Configuration"    doc:name="Database" streaming="true">
+			<db:select config-ref="Source_DB_Configuration"    doc:name="Backend" streaming="true">
                 <db:parameterized-query><![CDATA[select * from employees where number_no > #[flowVars['lastRecordID']] order by number_no asc]]></db:parameterized-query>
 			</db:select>
 		</poll>
 		<set-variable variableName="previousRecordID" value="#[flowVars['lastRecordID']]" doc:name="Initialize previousRecordID" />
 		<foreach doc:name="For Each">
 			<set-variable variableName="currentRecord" value="#[payload['number_no']]" doc:name="currentRecord" />
+            <db:insert config-ref="Middleware_MySQL_Configuration" doc:name="Middleware">
+                <db:parameterized-query><![CDATA[INSERT INTO employees(number_no, dob, first_name, last_name, gender, hire_date)
+VALUES
+    (#[payload['number_no']], 
+     #[payload['dob']],
+     #[payload['first_name']],
+     #[payload['last_name']],
+     #[payload['gender']],
+     #[payload['hire_date']])
+ON DUPLICATE KEY UPDATE
+	number_no = #[payload['number_no']],
+	dob = #[payload['dob']],
+	first_name = #[payload['first_name']],
+	last_name = #[payload['last_name']],
+	gender = #[payload['gender']],
+	hire_date = #[payload['hire_date']];]]></db:parameterized-query>
+            </db:insert>
 			<scripting:transformer doc:name="RandDividend">
 				<scripting:script engine="Groovy"><![CDATA[flowVars.dividend = Math.abs(new Random().nextInt() % 3 - 1);
 flowVars.divisor = Math.abs(new Random().nextInt() % 3 - 1);
 System.out.println("Curent Record ID:" + flowVars['currentRecord']);
 System.out.println("Payload: " + payload );
-System.out.println("Executing " + flowVars.dividend + " / " + flowVars.divisor );
+System.out.println("Executing RandDividend: " + flowVars.dividend + " / " + flowVars.divisor );
 def ans = flowVars.dividend / flowVars.divisor ;]]></scripting:script>
 			</scripting:transformer>
 			<set-variable variableName="previousRecordID" value="#[flowVars['currentRecord']]" doc:name="previousRecordID" />
@@ -43,6 +71,9 @@ System.out.println("Resetting Back to Last Successful Record ID:" + flowVars['pr
 	<flow name="resetObjectStore">
 		<http:listener config-ref="HTTP_Listener_Configuration" path="/pollReset" doc:name="HTTP" />
         <objectstore:retrieve-and-store config-ref="ObjectStore__Configuration" key="lastRecordID" defaultValue-ref="#[0]" storeValue-ref="#[message.inboundProperties.'http.query.params'.lastEmployeeID]" doc:name="ObjectStore"/>
+        <db:delete config-ref="Middleware_MySQL_Configuration" doc:name="Middleware">
+            <db:parameterized-query><![CDATA[delete from employees]]></db:parameterized-query>
+        </db:delete>
 		<logger message="Reset WaterMark to : #[message.inboundProperties.'http.query.params'.lastEmployeeID]" level="INFO" doc:name="Logger" />
 		<object-to-string-transformer doc:name="Object to String" />
 	</flow>
